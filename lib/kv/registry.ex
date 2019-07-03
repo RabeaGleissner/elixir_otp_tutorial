@@ -22,23 +22,40 @@ defmodule KV.Registry do
 
   @impl true
   def init(:ok) do
-    {:ok, %{}}
+    names = %{}
+    refs = %{}
+    {:ok, {names, refs}}
   end
 
   @impl true
-  #calls are synchronous
-  def handle_call({:lookup, name}, _from, names) do
-    {:reply, Map.fetch(names, name), names}
+  #calls are synchronous, should be default choice
+  def handle_call({:lookup, name}, _from, state) do
+    {names, _} = state
+    {:reply, Map.fetch(names, name), state}
   end
 
   @impl true
-  #casts are asynchronous
-  def handle_cast({:create, name}, names) do
+  #casts are asynchronous, use sparingly, here only used as an example
+  def handle_cast({:create, name}, {names, refs}) do
     if Map.has_key?(names, name) do
-      {:noreply, names}
+      {:noreply, {names, refs}}
     else
       {:ok, bucket} = KV.Bucket.start_link([])
-      {:noreply, Map.put(names, name, bucket)}
+      ref = Process.monitor(bucket)
+      refs = Map.put(refs, ref, name)
+      names = Map.put(names, name, bucket)
+      {:noreply, {names, refs}}
     end
+  end
+
+  #used for any other messages that are not sent from call/2 or cast/2
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, {names, refs}) do
+    {name, refs} = Map.pop(refs, ref)
+    names = Map.delete(names, name)
+    {:noreply, {names, refs}}
+  end
+
+  def handle_info(_msg, state) do
+    {:noreply, state}
   end
 end
